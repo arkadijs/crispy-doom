@@ -15,6 +15,8 @@ Crispy Doom is a limit-removing enhanced-resolution Doom source port based on [C
 
 Its name means that its internal 640x400 resolution looks "crisp" and is also a [slight reference](http://www.mathsisfun.com/recipie.html) to its origin.
 
+[![Crispy Doom with the CRT shader (click for the full image)](https://github.com/arkadijs/crispy-doom/blob/master/data/crt-thumb.png?raw=true)](https://github.com/arkadijs/crispy-doom/blob/master/data/crt.png)
+
 ## Synopsis
 
 Crispy Doom is a friendly fork of [Chocolate Doom](https://www.chocolate-doom.org/wiki/index.php/Chocolate_Doom) that provides a higher display resolution, removes the [static limits](https://doomwiki.org/wiki/Static_limits) of the Doom engine and offers further optional visual, tactical and physical enhancements while remaining entirely config file, savegame, netplay and demo compatible with the original.
@@ -57,6 +59,33 @@ Most of these features are disabled by default and need to get enabled either in
 Crispy Doom strives for maximum compatibility with all "limit-removing Vanilla" maps -- but not Boom or ZDoom maps. More specifically, Crispy Doom supports some select advanced features such as [ANIMATED](https://doomwiki.org/wiki/ANIMATED) and [SWITCHES](https://doomwiki.org/wiki/SWITCHES) lumps, MBF sky transfers, SMMU swirling flats and [MUSINFO](https://doomwiki.org/wiki/MUSINFO) -- but neither generalized linedef and sector types nor DECORATE and MAPINFO.
 
 Many additional less user-visible features have been implemented, e.g. fixed engine limitations and crashes, fixed rendering bugs, fixed harmless game logic bugs, full support for DEHACKED files and lumps in BEX format, additional and improved cheat codes, an improved Automap, and many more! Due to the extra DEHACKED states added from [MBF](https://doomwiki.org/wiki/MBF), Crispy Doom supports [enhancer](https://www.doomworld.com/forum/topic/84859-black-ops-smooth-weapons-dehacked-mod) [mods](https://www.doomworld.com/forum/topic/85991-smoothed-smooth-monsters-for-doom-retro-and-crispy-doom) that can make the gameplay even more pleasing to the eyes. For a detailed list of features and changes please refer to the release notes below.
+
+## CRT shader
+
+This fork adds an optional OpenGL 2.1 / GLSL 1.20 CRT shader (scanlines, phosphor mask, screen curvature, vignette and optional bloom). It only needs desktop OpenGL 2.1, so it also runs on old GPUs with Mesa drivers (e.g. Radeon R500). If OpenGL is not available the game silently falls back to the normal SDL renderer.
+
+Build as usual (the shader is always compiled in), then run the game with one of:
+
+```
+crispy-doom -crt        # scanlines, phosphor mask, curvature, vignette
+crispy-doom -crtfull    # the same plus bloom (needs framebuffer objects)
+crispy-doom -nocrt      # force it off, overriding the config file
+```
+
+To enable it permanently, set `crt_shader` to `1` (or `2` for bloom) in the extra config file (`crispy-doom.cfg`). Changing it requires a restart. Further tweaks, all in the range 0-100 unless noted:
+
+| Variable | Meaning |
+| --- | --- |
+| `crt_curvature` | screen curvature (default 20) |
+| `crt_scanlines` | scanline strength (default 70) |
+| `crt_mask` | phosphor mask: 0 none, 1 aperture grille, 2 shadow mask, 3 slot mask (default 1) |
+| `crt_mask_strength` | phosphor mask strength (default 30) |
+| `crt_vignette` | vignette strength (default 30) |
+| `crt_softness` | horizontal softness, 0 = sharp pixels, 100 = bilinear (default 0) |
+| `crt_bloom` | bloom strength, `crt_shader 2` only (default 25) |
+| `crt_shader_file` | path to a GLSL 1.20 fragment shader replacing the built-in one (max. 99 characters) |
+
+Tips: use `integer_scaling 1` if the phosphor mask looks busy at your window size, and set `crt_mask 0` or lower `crt_scanlines` to make the picture brighter or cheaper to render on slow GPUs. Screenshots include the CRT effect. On Wayland, run with `SDL_VIDEODRIVER=wayland` if SDL does not pick it automatically.
 
 ## Download
 

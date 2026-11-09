@@ -15,6 +15,10 @@
 
 **Crispy Doom**
 
+- Add an optional OpenGL 2.1 / GLSL 1.20 CRT shader (scanlines, phosphor mask,
+  curvature, vignette, optional bloom), enabled with `-crt` / `-crtfull` or
+  `crt_shader` in the config file (see the `crt_*` variables). It bypasses
+  SDL_Renderer and falls back to it automatically if OpenGL is unavailable.
 - Add support for the 200 dummy SFX added by DEHEXTRA.
 - Improve stat counting: stats are now identical for all players in netgames,
   and monsters resurrected by Arch-Viles or spawned by the Icon of Sin

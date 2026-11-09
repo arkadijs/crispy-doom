@@ -74,6 +74,16 @@ static int aspect_ratio_correct = 1;
 static int integer_scaling = 0;
 static int smooth_pixel_scaling = 1;
 static int vga_porch_flash = 0;
+// CRT shader settings: not editable here, but preserved when saving
+static int crt_shader = 0;
+static int crt_curvature = 20;
+static int crt_scanlines = 70;
+static int crt_mask = 1;
+static int crt_mask_strength = 30;
+static int crt_vignette = 30;
+static int crt_softness = 0;
+static int crt_bloom = 25;
+static char *crt_shader_file = "";
 static int force_software_renderer = 0;
 static int fullscreen = 1;
 static int fullscreen_width = 0, fullscreen_height = 0;
@@ -273,6 +283,15 @@ void BindDisplayVariables(void)
     M_BindIntVariable("usegamma",                  &usegamma);
     M_BindIntVariable("png_screenshots",           &png_screenshots);
     M_BindIntVariable("vga_porch_flash",           &vga_porch_flash);
+    M_BindIntVariable("crt_shader",                &crt_shader);
+    M_BindIntVariable("crt_curvature",             &crt_curvature);
+    M_BindIntVariable("crt_scanlines",             &crt_scanlines);
+    M_BindIntVariable("crt_mask",                  &crt_mask);
+    M_BindIntVariable("crt_mask_strength",         &crt_mask_strength);
+    M_BindIntVariable("crt_vignette",              &crt_vignette);
+    M_BindIntVariable("crt_softness",              &crt_softness);
+    M_BindIntVariable("crt_bloom",                 &crt_bloom);
+    M_BindStringVariable("crt_shader_file",        &crt_shader_file);
     M_BindIntVariable("force_software_renderer",   &force_software_renderer);
     M_BindIntVariable("max_scaling_buffer_pixels", &max_scaling_buffer_pixels);
 

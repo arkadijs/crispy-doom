@@ -815,6 +815,63 @@ static default_t extra_defaults_list[] =
     CONFIG_VARIABLE_INT(vga_porch_flash),
 
     //!
+    // CRT shader (OpenGL 2.1): 0 = off, 1 = scanlines/mask/curvature,
+    // 2 = same plus bloom. Takes effect at startup.
+    //
+
+    CONFIG_VARIABLE_INT(crt_shader),
+
+    //!
+    // CRT shader: screen curvature, 0-100.
+    //
+
+    CONFIG_VARIABLE_INT(crt_curvature),
+
+    //!
+    // CRT shader: scanline strength, 0-100.
+    //
+
+    CONFIG_VARIABLE_INT(crt_scanlines),
+
+    //!
+    // CRT shader phosphor mask: 0 = none, 1 = aperture grille,
+    // 2 = shadow mask, 3 = slot mask.
+    //
+
+    CONFIG_VARIABLE_INT(crt_mask),
+
+    //!
+    // CRT shader: phosphor mask strength, 0-100.
+    //
+
+    CONFIG_VARIABLE_INT(crt_mask_strength),
+
+    //!
+    // CRT shader: vignette strength, 0-100.
+    //
+
+    CONFIG_VARIABLE_INT(crt_vignette),
+
+    //!
+    // CRT shader: horizontal softness, 0 (sharp pixels) to 100 (bilinear).
+    //
+
+    CONFIG_VARIABLE_INT(crt_softness),
+
+    //!
+    // CRT shader (tier 2 only): bloom strength, 0-100.
+    //
+
+    CONFIG_VARIABLE_INT(crt_bloom),
+
+    //!
+    // CRT shader: path to a GLSL 1.20 fragment shader replacing the
+    // built-in one (for experimenting). Empty = built-in.
+    //
+
+    CONFIG_VARIABLE_STRING(crt_shader_file),
+
+    //!
     // Window width when running in windowed mode.
     //
 

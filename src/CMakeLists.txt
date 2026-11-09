@@ -77,6 +77,7 @@ set(GAME_SOURCE_FILES
     i_flmusic.c
     i_glob.c            i_glob.h
     i_input.c           i_input.h
+    i_crt.c             i_crt.h
     i_joystick.c        i_joystick.h
                         i_swap.h
     i_musicpack.c

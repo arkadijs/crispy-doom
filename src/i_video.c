@@ -36,6 +36,7 @@
 #include "d_loop.h"
 #include "deh_str.h"
 #include "doomtype.h"
+#include "i_crt.h"
 #include "i_input.h"
 #include "i_joystick.h"
 #include "i_system.h"
@@ -105,6 +106,11 @@ extern pixel_t* pal_color; // [crispy] evil hack to get FPS dots working as in V
 static SDL_Color palette[256];
 #endif
 static boolean palette_to_set;
+
+// [crt] OpenGL CRT shader presentation path in use (bypasses SDL_Renderer)?
+static boolean crt_active = false;
+static byte *crt_pixbuf = NULL;
+static size_t crt_pixbuf_size = 0;
 
 // display has been set up?
 
@@ -304,9 +310,20 @@ void I_ShutdownGraphics(void)
 #ifndef CRISPY_TRUECOLOR
         SDL_FreeSurface(screenbuffer);
 #endif
-        SDL_DestroyTexture(texture_upscaled);
-        SDL_DestroyTexture(texture);
-        SDL_DestroyRenderer(renderer);
+        if (crt_active)
+        {
+            I_CRT_Shutdown();
+            crt_active = false;
+            free(crt_pixbuf);
+            crt_pixbuf = NULL;
+            crt_pixbuf_size = 0;
+        }
+        else
+        {
+            SDL_DestroyTexture(texture_upscaled);
+            SDL_DestroyTexture(texture);
+            SDL_DestroyRenderer(renderer);
+        }
         SDL_DestroyWindow(screen);
         SDL_QuitSubSystem(SDL_INIT_VIDEO);
 
@@ -758,6 +775,63 @@ static void CreateUpscaledTexture(boolean force)
     }
 }
 
+#ifdef CRISPY_TRUECOLOR
+// [crt] There are no SDL textures for the screen flash panes in the OpenGL
+// path, so they are identified by unique dummy pointers and turned into a
+// color for the shader.
+static char crt_pane_ids[7];
+#define CRT_PANE(n) ((SDL_Texture *) &crt_pane_ids[n])
+
+static boolean CRT_GetPaneColor(SDL_Texture *pane, float rgb[3])
+{
+    static const byte colors[7][3] =
+    {
+        {0xff, 0x00, 0x00}, // red
+        {0xd7, 0xba, 0x45}, // yellow
+        {0x00, 0xff, 0x00}, // green
+        {0x2c, 0x5c, 0x24}, // Hexen poison green
+        {0x00, 0x00, 0xe0}, // blue
+        {0x82, 0x82, 0x82}, // gray
+        {0x96, 0x6e, 0x00}, // orange
+    };
+    int i;
+
+    for (i = 0; i < 7; ++i)
+    {
+        if (pane == CRT_PANE(i))
+        {
+            rgb[0] = colors[i][0] / 255.0f;
+            rgb[1] = colors[i][1] / 255.0f;
+            rgb[2] = colors[i][2] / 255.0f;
+            return true;
+        }
+    }
+
+    return false;
+}
+#endif
+
+// [crt] Describe the current frame for the OpenGL CRT path.
+static void CRT_FillFrame(crt_frame_t *f)
+{
+    memset(f, 0, sizeof(*f));
+
+    f->src_w = SCREENWIDTH;
+    f->src_h = SCREENHEIGHT;
+    f->lines = ORIGHEIGHT; // scanlines stay at the original 200 in hires modes
+    f->aspect_h = actualheight;
+    f->integer_scale = integer_scaling;
+    f->aspect_correct = aspect_ratio_correct;
+    f->vsync = crispy->vsync && (!singletics || crispy->demowarp);
+
+#ifdef CRISPY_TRUECOLOR
+    if (curpane && CRT_GetPaneColor(curpane, f->tint))
+    {
+        f->tint[3] = pane_alpha / 255.0f;
+    }
+#endif
+}
+
 // [AM] Fractional part of the current tic, in the half-open
 //      range of [0.0, 1.0).  Used for interpolation.
 fixed_t fractionaltic;
@@ -794,7 +868,10 @@ void I_FinishUpdate (void)
                 AdjustWindowSize();
                 SDL_SetWindowSize(screen, window_width, window_height);
             }
-            CreateUpscaledTexture(false);
+            if (!crt_active)
+            {
+                CreateUpscaledTexture(false);
+            }
             need_resize = false;
             palette_to_set = true;
         }
@@ -871,6 +948,11 @@ void I_FinishUpdate (void)
         {
             // "flash" the pillars/letterboxes with palette changes, emulating
             // VGA "porch" behaviour (GitHub issue #832)
+            if (crt_active)
+            {
+                I_CRT_SetBorderColor(palette[0].r, palette[0].g, palette[0].b);
+            }
+            else
             SDL_SetRenderDrawColor(renderer, palette[0].r, palette[0].g,
                 palette[0].b, SDL_ALPHA_OPAQUE);
         }
@@ -880,14 +962,50 @@ void I_FinishUpdate (void)
     // 32-bit RGBA buffer and update the intermediate texture with the
     // contents of the RGBA buffer.
 
+    if (crt_active)
+    {
+        // The CRT path owns a plain pixel buffer instead of a locked
+        // SDL streaming texture.
+        size_t need = (size_t) SCREENWIDTH * SCREENHEIGHT * 4;
+
+        if (crt_pixbuf_size != need)
+        {
+            free(crt_pixbuf);
+            crt_pixbuf = malloc(need);
+            crt_pixbuf_size = need;
+            if (crt_pixbuf == NULL)
+            {
+                I_Error("I_FinishUpdate: out of memory for the CRT buffer");
+            }
+        }
+
+        argbbuffer->pixels = crt_pixbuf;
+        argbbuffer->pitch = SCREENWIDTH * 4;
+        SDL_LowerBlit(screenbuffer, &blit_rect, argbbuffer, &blit_rect);
+    }
+    else
+    {
     SDL_LockTexture(texture, &blit_rect, &argbbuffer->pixels,
                     &argbbuffer->pitch);
     SDL_LowerBlit(screenbuffer, &blit_rect, argbbuffer, &blit_rect);
     SDL_UnlockTexture(texture);
+    }
 #else
-    SDL_UpdateTexture(texture, NULL, argbbuffer->pixels, argbbuffer->pitch);
+    if (!crt_active)
+    {
+        SDL_UpdateTexture(texture, NULL, argbbuffer->pixels, argbbuffer->pitch);
+    }
 #endif
 
+    if (crt_active)
+    {
+        crt_frame_t frame;
+
+        CRT_FillFrame(&frame);
+        I_CRT_Present(argbbuffer->pixels, &frame);
+    }
+    else
+    {
     // Make sure the pillarboxes are kept clear each frame.
 
     SDL_RenderClear(renderer);
@@ -921,6 +1039,7 @@ void I_FinishUpdate (void)
     // Draw!
 
     SDL_RenderPresent(renderer);
+    }
 
     if (crispy->uncapped && !singletics)
     {
@@ -1324,6 +1443,41 @@ void I_GraphicsCheckCommandLine(void)
 
     //!
     // @category video
+    //
+    // Enable the OpenGL CRT shader (scanlines, phosphor mask, curvature).
+    // Requires OpenGL 2.1; falls back to the normal renderer otherwise.
+    //
+
+    if (M_CheckParm("-crt"))
+    {
+        crt_shader = CRT_LITE;
+    }
+
+    //!
+    // @category video
+    //
+    // Enable the OpenGL CRT shader with bloom/halation. Needs framebuffer
+    // object support, otherwise behaves like -crt.
+    //
+
+    if (M_CheckParm("-crtfull"))
+    {
+        crt_shader = CRT_FULL;
+    }
+
+    //!
+    // @category video
+    //
+    // Disable the CRT shader, overriding the configuration file.
+    //
+
+    if (M_CheckParm("-nocrt"))
+    {
+        crt_shader = CRT_OFF;
+    }
+
+    //!
+    // @category video
     // @arg <x>
     //
     // Specify the display number on which to show the screen.
@@ -1465,12 +1619,36 @@ void I_GetWindowPosition(int *x, int *y, int w, int h)
     }
 }
 
+static void CreateSDLRenderer(void);
+static void SetupBuffers(void);
+
+static SDL_Window *CreateGameWindow(int x, int y, int w, int h, int flags)
+{
+    SDL_Window *win = SDL_CreateWindow(NULL, x, y, w, h, flags);
+
+    if (win == NULL)
+    {
+        if (flags & SDL_WINDOW_OPENGL)
+        {
+            // [crt] caller falls back to a non-GL window
+            return NULL;
+        }
+
+        I_Error("Error creating window for video startup: %s",
+        SDL_GetError());
+    }
+
+    SDL_SetWindowMinimumSize(win, SCREENWIDTH, actualheight);
+
+    return win;
+}
+
 static void SetVideoMode(void)
 {
     int w, h;
     int x, y;
-    int window_flags = 0, renderer_flags = 0;
-    SDL_DisplayMode mode;
+    int window_flags = 0;
+    boolean want_crt;
 
     w = window_width;
     h = window_height;
@@ -1516,21 +1694,67 @@ static void SetVideoMode(void)
     // "window_flags" contains the fullscreen flag (see above), then
     // w and h are ignored.
 
+    // [crt] The CRT shader path needs an OpenGL window and context, which
+    // SDL_Renderer can't give us custom shaders on, so it is a separate path.
+    want_crt = (crt_shader != CRT_OFF) && !force_software_renderer
+            && screen == NULL;
+
+    if (want_crt)
+    {
+        I_CRT_SetGLAttributes();
+        window_flags |= SDL_WINDOW_OPENGL;
+    }
+
     if (screen == NULL)
     {
-        screen = SDL_CreateWindow(NULL, x, y, w, h, window_flags);
+        screen = CreateGameWindow(x, y, w, h, window_flags);
 
         if (screen == NULL)
         {
-            I_Error("Error creating window for video startup: %s",
-            SDL_GetError());
+            // [crt] the video driver can't do OpenGL windows
+            fprintf(stderr, "I_CRT: can't create an OpenGL window: %s\n",
+                    SDL_GetError());
+            want_crt = false;
+            SDL_GL_ResetAttributes();
+            window_flags &= ~SDL_WINDOW_OPENGL;
+            screen = CreateGameWindow(x, y, w, h, window_flags);
         }
-
-        SDL_SetWindowMinimumSize(screen, SCREENWIDTH, actualheight);
 
         I_InitWindowTitle();
         I_InitWindowIcon();
     }
+
+    crt_active = false;
+
+    if (want_crt)
+    {
+        crt_active = I_CRT_Init(screen);
+
+        if (!crt_active)
+        {
+            // Fall back to SDL_Renderer on a plain (non-GL) window.
+            fprintf(stderr, "I_CRT: falling back to the SDL renderer\n");
+            SDL_GL_ResetAttributes();
+            SDL_DestroyWindow(screen);
+            screen = CreateGameWindow(x, y, w, h,
+                                      window_flags & ~SDL_WINDOW_OPENGL);
+            I_InitWindowTitle();
+            I_InitWindowIcon();
+        }
+    }
+
+    if (!crt_active)
+    {
+        CreateSDLRenderer();
+    }
+
+    SetupBuffers();
+}
+
+static void CreateSDLRenderer(void)
+{
+    int renderer_flags;
+    SDL_DisplayMode mode;
 
     // The SDL_RENDERER_TARGETTEXTURE flag is required to render the
     // intermediate texture into the upscaled texture.
@@ -1612,7 +1836,10 @@ static void SetVideoMode(void)
     SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
     SDL_RenderClear(renderer);
     SDL_RenderPresent(renderer);
+}
 
+static void SetupBuffers(void)
+{
 #ifndef CRISPY_TRUECOLOR
     // Create the 8-bit paletted and the 32-bit RGBA screenbuffer surfaces.
 
@@ -1647,38 +1874,97 @@ static void SetVideoMode(void)
                      0, SCREENWIDTH, SCREENHEIGHT, 32, SDL_PIXELFORMAT_ARGB8888);
 
         SDL_FillRect(argbbuffer, NULL, I_MapRGB(0xff, 0x0, 0x0));
-        redpane = SDL_CreateTextureFromSurface(renderer, argbbuffer);
-        SDL_SetTextureBlendMode(redpane, SDL_BLENDMODE_BLEND);
+        if (crt_active)
+        {
+            redpane = CRT_PANE(0);
+        }
+        else
+        {
+            redpane = SDL_CreateTextureFromSurface(renderer, argbbuffer);
+            SDL_SetTextureBlendMode(redpane, SDL_BLENDMODE_BLEND);
+        }
 
         SDL_FillRect(argbbuffer, NULL, I_MapRGB(0xd7, 0xba, 0x45));
-        yelpane = SDL_CreateTextureFromSurface(renderer, argbbuffer);
-        SDL_SetTextureBlendMode(yelpane, SDL_BLENDMODE_BLEND);
+        if (crt_active)
+        {
+            yelpane = CRT_PANE(1);
+        }
+        else
+        {
+            yelpane = SDL_CreateTextureFromSurface(renderer, argbbuffer);
+            SDL_SetTextureBlendMode(yelpane, SDL_BLENDMODE_BLEND);
+        }
 
         SDL_FillRect(argbbuffer, NULL, I_MapRGB(0x0, 0xff, 0x0));
-        grnpane = SDL_CreateTextureFromSurface(renderer, argbbuffer);
-        SDL_SetTextureBlendMode(grnpane, SDL_BLENDMODE_BLEND);
+        if (crt_active)
+        {
+            grnpane = CRT_PANE(2);
+        }
+        else
+        {
+            grnpane = SDL_CreateTextureFromSurface(renderer, argbbuffer);
+            SDL_SetTextureBlendMode(grnpane, SDL_BLENDMODE_BLEND);
+        }
 
         SDL_FillRect(argbbuffer, NULL, I_MapRGB(0x2c, 0x5c, 0x24)); // 44, 92, 36
-        grnspane = SDL_CreateTextureFromSurface(renderer, argbbuffer);
-        SDL_SetTextureBlendMode(grnspane, SDL_BLENDMODE_BLEND);
+        if (crt_active)
+        {
+            grnspane = CRT_PANE(3);
+        }
+        else
+        {
+            grnspane = SDL_CreateTextureFromSurface(renderer, argbbuffer);
+            SDL_SetTextureBlendMode(grnspane, SDL_BLENDMODE_BLEND);
+        }
 
         SDL_FillRect(argbbuffer, NULL, I_MapRGB(0x0, 0x0, 0xe0)); // 0, 0, 224
-        bluepane = SDL_CreateTextureFromSurface(renderer, argbbuffer);
-        SDL_SetTextureBlendMode(bluepane, SDL_BLENDMODE_BLEND);
+        if (crt_active)
+        {
+            bluepane = CRT_PANE(4);
+        }
+        else
+        {
+            bluepane = SDL_CreateTextureFromSurface(renderer, argbbuffer);
+            SDL_SetTextureBlendMode(bluepane, SDL_BLENDMODE_BLEND);
+        }
 
         SDL_FillRect(argbbuffer, NULL, I_MapRGB(0x82, 0x82, 0x82)); // 130, 130, 130
-        graypane = SDL_CreateTextureFromSurface(renderer, argbbuffer);
-        SDL_SetTextureBlendMode(graypane, SDL_BLENDMODE_BLEND);
+        if (crt_active)
+        {
+            graypane = CRT_PANE(5);
+        }
+        else
+        {
+            graypane = SDL_CreateTextureFromSurface(renderer, argbbuffer);
+            SDL_SetTextureBlendMode(graypane, SDL_BLENDMODE_BLEND);
+        }
 
         SDL_FillRect(argbbuffer, NULL, I_MapRGB(0x96, 0x6e, 0x0)); // 150, 110, 0
-        orngpane = SDL_CreateTextureFromSurface(renderer, argbbuffer);
-        SDL_SetTextureBlendMode(orngpane, SDL_BLENDMODE_BLEND);
+        if (crt_active)
+        {
+            orngpane = CRT_PANE(6);
+        }
+        else
+        {
+            orngpane = SDL_CreateTextureFromSurface(renderer, argbbuffer);
+            SDL_SetTextureBlendMode(orngpane, SDL_BLENDMODE_BLEND);
+        }
 #else
 	    // pixels and pitch will be filled with the texture's values
 	    // in I_FinishUpdate()
 	    argbbuffer = SDL_CreateRGBSurfaceWithFormatFrom(
-                     NULL, w, h, 0, 0, SDL_PIXELFORMAT_ARGB8888);
+                     NULL, SCREENWIDTH, SCREENHEIGHT, 0, 0,
+                     SDL_PIXELFORMAT_ARGB8888);
 #endif
+    }
+
+    if (crt_active)
+    {
+        if (!I_CRT_ResizeSource(SCREENWIDTH, SCREENHEIGHT, ORIGHEIGHT))
+        {
+            I_Error("Error creating OpenGL source texture");
+        }
+        return;
     }
 
     if (texture != NULL)
@@ -1776,6 +2062,12 @@ void I_GetScreenDimensions (void)
 // [crispy] calls native SDL vsync toggle
 void I_ToggleVsync (void)
 {
+    if (crt_active)
+    {
+        // applied on the next frame by I_CRT_Present()
+        return;
+    }
+
 #if SDL_VERSION_ATLEAST(2, 0, 18)
     SDL_RenderSetVSync(renderer, crispy->vsync);
 #else
@@ -1941,11 +2233,14 @@ void I_ReInitGraphics (int reinit)
 		V_RestoreBuffer();
 
 		// [crispy] it will get re-created below with the new resolution
-		SDL_DestroyTexture(texture);
+		if (!crt_active)
+		{
+			SDL_DestroyTexture(texture);
+		}
 	}
 
 	// [crispy] re-create renderer
-	if (reinit & REINIT_RENDERER)
+	if ((reinit & REINIT_RENDERER) && !crt_active)
 	{
 		SDL_RendererInfo info = {0};
 		int flags;
@@ -1971,6 +2266,11 @@ void I_ReInitGraphics (int reinit)
 	}
 
 	// [crispy] re-create textures
+	if ((reinit & REINIT_TEXTURES) && crt_active)
+	{
+		I_CRT_ResizeSource(SCREENWIDTH, SCREENHEIGHT, ORIGHEIGHT);
+	}
+	else
 	if (reinit & REINIT_TEXTURES)
 	{
 		SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "nearest");
@@ -1996,6 +2296,11 @@ void I_ReInitGraphics (int reinit)
 			actualheight = SCREENHEIGHT;
 		}
 
+		if (crt_active)
+		{
+			// the CRT path computes its viewport on every frame
+		}
+		else
 		if (aspect_ratio_correct || integer_scaling)
 		{
 			SDL_RenderSetLogicalSize(renderer,
@@ -2008,7 +2313,10 @@ void I_ReInitGraphics (int reinit)
 		}
 
 		#if SDL_VERSION_ATLEAST(2, 0, 5)
-		SDL_RenderSetIntegerScale(renderer, integer_scaling);
+		if (!crt_active)
+		{
+			SDL_RenderSetIntegerScale(renderer, integer_scaling);
+		}
 		#endif
 	}
 
@@ -2025,6 +2333,27 @@ void I_RenderReadPixels(byte **data, int *w, int *h, int *p)
 	int temp;
 	uint32_t png_format;
 	byte *pixels;
+
+	// [crt] screenshot of the CRT-shaded image
+	if (crt_active)
+	{
+		crt_frame_t frame;
+
+		CRT_FillFrame(&frame);
+		pixels = I_CRT_ReadPixels(&frame, w, h, p);
+
+		if (pixels == NULL)
+		{
+			// nothing drawn yet: hand back a black frame
+			*w = SCREENWIDTH;
+			*h = actualheight;
+			*p = *w * 3;
+			pixels = calloc(*h, *p);
+		}
+
+		*data = pixels;
+		return;
+	}
 
 	// [crispy] adjust cropping rectangle if necessary
 	rect.x = rect.y = 0;
@@ -2108,6 +2437,15 @@ void I_BindVideoVariables(void)
     M_BindIntVariable("window_width",              &window_width);
     M_BindIntVariable("window_height",             &window_height);
     M_BindIntVariable("grabmouse",                 &grabmouse);
+    M_BindIntVariable("crt_shader",                &crt_shader);
+    M_BindIntVariable("crt_curvature",             &crt_curvature);
+    M_BindIntVariable("crt_scanlines",             &crt_scanlines);
+    M_BindIntVariable("crt_mask",                  &crt_mask);
+    M_BindIntVariable("crt_mask_strength",         &crt_mask_strength);
+    M_BindIntVariable("crt_vignette",              &crt_vignette);
+    M_BindIntVariable("crt_softness",              &crt_softness);
+    M_BindIntVariable("crt_bloom",                 &crt_bloom);
+    M_BindStringVariable("crt_shader_file",        &crt_shader_file);
     M_BindStringVariable("video_driver",           &video_driver);
     M_BindStringVariable("window_position",        &window_position);
     M_BindIntVariable("usegamma",                  &usegamma);
